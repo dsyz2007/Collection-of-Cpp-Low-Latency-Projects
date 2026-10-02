@@ -1,0 +1,13 @@
+*.md
+!README.md
+
+# compiled binaries and objects
+*.o
+*.s
+test
+bench
+main
+a.out
+*_asan
+*_tsan
+*_ubsan
