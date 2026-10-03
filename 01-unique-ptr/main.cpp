@@ -6,6 +6,7 @@
 #include "../common/tracer.h"
 
 
+
 // ---- compile-time checks: these cost nothing at runtime ----
 // static_assert(condition, "message")  --> if condition is false, compile error with "message" shown
 static_assert(!std::is_copy_constructible_v<Unique<int>>,        "Unique must not be copyable");
@@ -13,10 +14,17 @@ static_assert(!std::is_copy_assignable_v<Unique<int>>,           "Unique must no
 static_assert(std::is_nothrow_move_constructible_v<Unique<int>>, "move constructor must be noexcept");
 static_assert(sizeof(Unique<int>) == sizeof(int*),               "Unique must be pointer-sized");
 
+static_assert(!std::is_copy_constructible_v<Unique<int[]>>,        "array Unique must not be copyable");
+static_assert(std::is_nothrow_move_constructible_v<Unique<int[]>>, "array move constructor must be noexcept");
+static_assert(sizeof(Unique<int[]>) == sizeof(int*),               "array Unique must be pointer-sized");
+
+
+
 
 int main() {
     int failures = 0;
     auto fail = [&failures](const char* msg) { std::printf("       -> %s\n", msg); ++failures; };
+
 
     // 1. construct, observe, destroy
     Tracer::reset();
@@ -28,6 +36,7 @@ int main() {
         if (u->id != 1)         fail("operator-> gave the wrong id");
     }
     if (!Tracer::expect(1, 0, 0, 0, 0, 1, "construct + destroy")) ++failures;
+
 
     // 2. moving a Unique moves the POINTER, never the Tracer
     Tracer::reset();
@@ -41,6 +50,7 @@ int main() {
     }
     if (!Tracer::expect(1, 0, 0, 0, 0, 1, "move construct")) ++failures;
 
+
     // 3. release gives up ownership WITHOUT deleting
     Tracer::reset();
     {
@@ -52,6 +62,7 @@ int main() {
         if (Tracer::destroys != 1) fail("manual delete should have destroyed it");
     }
     if (!Tracer::expect(1, 0, 0, 0, 0, 1, "release + manual delete")) ++failures;
+
 
     // 4. reset deletes the old object and adopts the new one
     Tracer::reset();
@@ -66,6 +77,7 @@ int main() {
     }
     if (!Tracer::expect(2, 0, 0, 0, 0, 2, "reset")) ++failures;
 
+
     // 5. move assignment deletes whatever the target already owned
     Tracer::reset();
     {
@@ -78,6 +90,7 @@ int main() {
     }
     if (!Tracer::expect(2, 0, 0, 0, 0, 2, "move assign")) ++failures;
 
+
     // 6. self-move must not destroy anything
     Tracer::reset();
     {
@@ -88,6 +101,7 @@ int main() {
         if (u.get() != before)     fail("self-move must leave u owning the same object");
     }
     if (!Tracer::expect(1, 0, 0, 0, 0, 1, "self-move")) ++failures;
+
 
     // 7. swap exchanges ownership and deletes nothing
     Tracer::reset();
@@ -102,6 +116,7 @@ int main() {
     }
     if (!Tracer::expect(2, 0, 0, 0, 0, 2, "swap")) ++failures;
 
+
     // 8. an empty Unique is safe everywhere it is allowed to be
     Tracer::reset();
     {
@@ -113,6 +128,7 @@ int main() {
     }
     if (!Tracer::expect(0, 0, 0, 0, 0, 0, "empty Unique")) ++failures;
 
+    
     // 9. const Unique fixes the POINTER, not the object it points at
     Tracer::reset();
     {
@@ -121,6 +137,79 @@ int main() {
         if (cu->id != 9) fail("should be able to modify the object through a const Unique");
     }
     if (!Tracer::expect(1, 0, 0, 0, 0, 1, "const Unique")) ++failures;
+
+
+    // 10. make_unique forwards: lvalue -> copy, rvalue -> move, args -> in place
+    Tracer::reset();
+    {
+        Tracer t(7, 1.5);
+        auto u = make_unique<Tracer>(t);
+        if (t.id != 7)  fail("make_unique must COPY from an lvalue, not steal from it");
+        auto v = make_unique<Tracer>(std::move(t));
+        auto w = make_unique<Tracer>(3, 4.0);
+        if (u->id != 7) fail("u should hold a copy of t");
+        if (v->id != 7) fail("v should hold what was moved out of t");
+        if (w->id != 3) fail("w should be built in place from (3, 4.0)");
+    }
+    if (!Tracer::expect(2, 1, 1, 0, 0, 4, "make_unique forwarding")) ++failures;
+
+
+    // 11. make_unique<int[]> value-initialises: every element is zero
+    {
+        auto a = make_unique<int[]>(4);
+        if (a[0] != 0 || a[1] != 0 || a[2] != 0 || a[3] != 0) fail("make_unique<int[]>(4) must give four zeros");
+    }
+
+
+    // 12. make_unique<Tracer[]> builds and destroys every element exactly once
+    Tracer::reset();
+    {
+        auto t = make_unique<Tracer[]>(4);
+        if (!t) fail("array Unique should be true when owning");
+    }
+    if (!Tracer::expect(4, 0, 0, 0, 0, 4, "make_unique<Tracer[]>(4)")) ++failures;
+
+
+    // 13. operator[] returns a reference: writes reach the owned element
+    {
+        auto t = make_unique<Tracer[]>(4);
+        t[2].id = 42;
+        if (t[2].id != 42) fail("t[2].id = 42 should change the element itself");
+        if (t[1].id != 0)  fail("the other elements should be untouched");
+    }
+
+
+    // 14. array moves and reset: every delete in Unique<T[]> must be delete[]
+    Tracer::reset();
+    {
+        auto a = make_unique<Tracer[]>(4);
+        Unique<Tracer[]> b(std::move(a));
+        if (a.get() != nullptr) fail("moved-from array Unique must be empty");
+        auto c = make_unique<Tracer[]>(2);
+        c = std::move(b);
+        if (Tracer::destroys != 2) fail("move assign must destroy the target's old array");
+        c.reset(new Tracer[3]);
+        if (Tracer::destroys != 6) fail("reset must destroy the old array");
+    }
+    if (!Tracer::expect(9, 0, 0, 0, 0, 9, "array moves + reset")) ++failures;
+
+
+    // 15. array swap and release
+    Tracer::reset();
+    {
+        auto a = make_unique<Tracer[]>(2);
+        auto b = make_unique<Tracer[]>(3);
+        Tracer* first = a.get();
+        a.swap(b);
+        if (b.get() != first) fail("swap must exchange the two arrays");
+        Tracer* raw = a.release();
+        if (a) fail("release must leave the array Unique empty");
+        delete[] raw;                          // we own it now: delete[], not delete
+    }
+    if (!Tracer::expect(5, 0, 0, 0, 0, 5, "array swap + release")) ++failures;
+
+    
+
 
     std::printf("\n%s (%d failure%s)\n",
                 failures == 0 ? "ALL TESTS PASSED" : "TESTS FAILED",

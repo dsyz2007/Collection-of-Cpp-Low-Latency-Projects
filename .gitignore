@@ -5,8 +5,9 @@
 *.o
 *.s
 test
-bench
+/01-unique-ptr/bench/bench
 main
+Unique
 a.out
 *_asan
 *_tsan
