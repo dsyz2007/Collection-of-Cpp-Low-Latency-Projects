@@ -8,9 +8,21 @@
 
 
 template<typename T>
+struct DefaultDelete {
+    // overload for operator "()"
+    void operator()(T* p) const noexcept {  // it is "const" cos calling this function doesn't change this DefaultDelete object, it only changes "p" (doesn't belong to this struct)
+        delete p; // serves Unique single-object created from plain "new"
+    }
+};
+
+
+
+
+template<typename T, typename D = DefaultDelete<T>>
 class Unique {
     private:
-        T* ptr_ = nullptr;      
+        T* ptr_ = nullptr;
+        [[no_unique_address]] D deleter_{};      
 
     public:
         // empty-constructor (Constructors don't have return types at all)
@@ -60,75 +72,79 @@ class Unique {
 
 
 // non-empty constructor
-template<typename T>
-Unique<T>::Unique(T* p) noexcept : ptr_{p}
+template<typename T, typename D>
+Unique<T, D>::Unique(T* p) noexcept : ptr_{p}
 {
 
 }
 
 
 // destructor
-template<typename T>
-Unique<T>::~Unique(){
-    delete ptr_; // fun fact: this deletes the tracer object that ptr_ points to, "ptr_" still exists after this, just that it points to freed unallocated space now
-    ptr_ = nullptr;
+template<typename T, typename D>
+Unique<T, D>::~Unique(){
+    if (ptr_) {
+        deleter_(ptr_); // fun fact: this deletes the tracer object that ptr_ points to, "ptr_" still exists after this, just that it points to freed unallocated space now
+    }
 }
 
 
 // move-constructor
-template<typename T>
-Unique<T>::Unique(Unique&& other) noexcept : ptr_{std::move(other.ptr_)}
+template<typename T, typename D>
+Unique<T, D>::Unique(Unique&& other) noexcept : ptr_{std::move(other.ptr_)}
 {
     other.ptr_ = nullptr;
 }
 
 
 // move-assignment
-template<typename T>
-Unique<T>& Unique<T>::operator=(Unique&& other) noexcept
+template<typename T, typename D>
+Unique<T, D>& Unique<T, D>::operator=(Unique&& other) noexcept
 {
     if (this == &other) return *this; // edge case (check by comparing address): self-move
-    delete ptr_; // IMPORTANT: this's ptr_ may alrdy own something which must be deleted first to prevent leaks
+    T* temp = ptr_;
     ptr_ = std::move(other.ptr_);
     other.ptr_ = nullptr;
+    if (temp) {
+        deleter_(temp); // IMPORTANT: this's ptr_ may alrdy own something which must be deleted to prevent leaks
+    }
     return *this;
 }
 
 
 // overload for * operator
-template<typename T>
-T& Unique<T>::operator*() const noexcept 
+template<typename T, typename D>
+T& Unique<T, D>::operator*() const noexcept 
 {
     return *ptr_;
 }
 
 
 // overload for -> operator ("->" is essentially the same as (*pointer).member). Rule: All "->" operators must return type T* (it is a C++ rule!)
-template<typename T>
-T* Unique<T>::operator->() const noexcept 
+template<typename T, typename D>
+T* Unique<T, D>::operator->() const noexcept 
 {
     return ptr_;
 }
 
 
 // get()
-template<typename T>
-T* Unique<T>::get() const noexcept
+template<typename T, typename D>
+T* Unique<T, D>::get() const noexcept
 {
     return ptr_;
 }
 
 
 // bool() [This is a conversion operator, no return type needed since its name alrdy says what it returns]
-template<typename T>
-Unique<T>::operator bool() const noexcept{
+template<typename T, typename D>
+Unique<T, D>::operator bool() const noexcept{
     return ptr_ != nullptr;
 }
 
 
 // release()
-template<typename T>
-T* Unique<T>::release() noexcept
+template<typename T, typename D>
+T* Unique<T, D>::release() noexcept
 {
     T* temp = ptr_;
     ptr_ = nullptr;
@@ -137,18 +153,20 @@ T* Unique<T>::release() noexcept
 
 
 // reset()
-template<typename T>
-void Unique<T>::reset(T* p) noexcept
+template<typename T, typename D>
+void Unique<T, D>::reset(T* p) noexcept
 {
     T* temp = ptr_;
     ptr_ = p;
-    delete temp; // IMPORTANT: Prevent Memory Leak (detectable with ASan build)
+    if (temp) {
+        deleter_(temp); // IMPORTANT: Prevent Memory Leak (detectable with ASan build)
+    }
 }
 
 
 // swap()
-template<typename T>
-void Unique<T>::swap(Unique& other) noexcept
+template<typename T, typename D>
+void Unique<T, D>::swap(Unique& other) noexcept
 {
     T* temp = ptr_;
     ptr_ = other.ptr_;
@@ -169,7 +187,7 @@ Unique<T> make_unique(Args&&... args)
 
 
 template<typename T>
-class Unique<T[]> {
+class Unique<T[]> {   // the "<T[]" is written cos this class is a specialisation class (for array of objects) of a pre-existing general/primary class "Unique"
     private:
         T* ptr_ = nullptr;      
 

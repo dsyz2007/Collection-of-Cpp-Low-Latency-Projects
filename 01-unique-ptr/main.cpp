@@ -20,6 +20,23 @@ static_assert(sizeof(Unique<int[]>) == sizeof(int*),               "array Unique
 
 
 
+// A deleter that counts how often it is called (used by test 16)
+// Btw the counter is static, so the struct still has no data members
+struct CountingDelete {
+    static inline int calls = 0;
+    void operator()(Tracer* p) const noexcept { 
+        ++calls;
+        delete p; 
+    }
+};
+
+// A deleter with real state (one int), used by test 17 to see what state costs in size.
+struct TaggedDelete {
+    int tag = 0;
+    void operator()(Tracer* p) const noexcept { delete p; }
+};
+
+
 
 int main() {
     int failures = 0;
@@ -209,6 +226,35 @@ int main() {
     if (!Tracer::expect(5, 0, 0, 0, 0, 5, "array swap + release")) ++failures;
 
     
+    // 16. a custom deleter is used on every release path, and never handed nullptr
+    Tracer::reset();
+    CountingDelete::calls = 0;
+    {
+        Unique<Tracer, CountingDelete> a(new Tracer(1, 0.0));
+        a.reset(new Tracer(2, 0.0));                    // release path 1: reset()
+        if (CountingDelete::calls != 1) fail("reset() must release through the deleter");
+
+        Unique<Tracer, CountingDelete> b(new Tracer(3, 0.0));
+        a = std::move(b);                               // release path 2: move assignment
+        if (CountingDelete::calls != 2) fail("move assignment must release through the deleter");
+
+        Unique<Tracer, CountingDelete> empty;           // owns nothing
+    }   // release path 3: a's destructor. b (moved from) and empty own nothing: no call for them
+    if (CountingDelete::calls != 3) fail("the destructor must release through the deleter, and never call it with nullptr");
+    if (!Tracer::expect(3, 0, 0, 0, 0, 3, "custom deleter")) ++failures;
+
+
+    // 17. the "sizeof" test
+    Tracer::reset();
+    {
+        Unique<Tracer> a(new Tracer(1, 0.0));
+        std::printf("size of Unique<Tracer> with empty DefaultDelete: %zu\n", sizeof(a));
+
+        Unique<Tracer, TaggedDelete> b(new Tracer(2, 0.0));
+        std::printf("size of Unique<Tracer> with a deleter holding an int: %zu\n", sizeof(b));
+
+    }
+
 
 
     std::printf("\n%s (%d failure%s)\n",
