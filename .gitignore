@@ -5,7 +5,8 @@
 *.o
 *.s
 test
-/01-unique-ptr/bench/bench
+**/bench/bench
+/02-static-vector/static_vector
 main
 Unique
 a.out
