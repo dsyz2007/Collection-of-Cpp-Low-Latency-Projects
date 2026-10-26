@@ -4,7 +4,7 @@
 #include <cstddef>   // for std::byte, std::size_t
 #include <memory>    // for std::construct_at, std::destroy_at
 #include <type_traits>   // for std::is_trivially_destructible_v<T>
-#include <utility>
+#include <utility>   // for std::move()
 
 
 
@@ -38,10 +38,62 @@ class static_vector {
             clear();    
         }
 
-    static_vector(const static_vector& other);
-    static_vector& operator=(const static_vector& other);
-    static_vector(static_vector&& other) noexcept(std::is_nothrow_move_constructible_v<T>);
-    static_vector& operator=(static_vector&& other) noexcept(std::is_nothrow_move_constructible_v<T>);
+        // copy constructor
+        static_vector(const static_vector& other)
+        {
+            try { // "try" means run this, if anything inside throws, jump to catch immediately instead of leaving the function immediately
+                for (std::size_t i = 0; i < other.size_; ++i) {
+                    try_emplace_back(other[i]);
+                }
+            } catch (...) {  // "..." means any exception type
+                clear();  // destroy elements built so far (important to prevent memory leak when constructor throws [usually the destructor will clean up, but in our case the elements are not part of object so they will not be cleaned up by destructor, hence we need try-catch manually])
+                throw;  // re-throws the same exception so that caller still learns that the copy failed
+            }
+        }
+    
+        // copy assignment
+        static_vector& operator=(const static_vector& other)
+        {
+            if (this == &other) return *this;  // edge case
+            clear();
+            for (std::size_t i = 0; i < other.size_; ++i) {
+                try_emplace_back(other[i]);
+            }
+            return *this;
+        }
+
+        // move constructor
+        static_vector(static_vector&& other) noexcept(std::is_nothrow_move_constructible_v<T>)
+        {
+            if constexpr (std::is_nothrow_move_constructible_v<T>) {
+                for (std::size_t i = 0; i < other.size_; ++i) {
+                    try_emplace_back(std::move(other[i]));
+                }
+                other.clear(); // don't forget this very important line to prevent double free
+            } else {
+                try {
+                    for (std::size_t i = 0; i < other.size_; ++i) {
+                        try_emplace_back(std::move(other[i]));
+                    }
+                    other.clear(); // don't forget this very important line to prevent double free
+                } catch(...) {
+                    clear();
+                    throw;
+                }
+            }
+        }
+        
+        // move assignment
+        static_vector& operator=(static_vector&& other) noexcept(std::is_nothrow_move_constructible_v<T>)
+        {
+            if (this == &other) return *this;
+            clear();
+            for (std::size_t i = 0; i < other.size_; ++i) {
+                try_emplace_back(std::move(other[i]));
+            }
+            other.clear();
+            return *this;
+        }
 
         // build a new T directly in next free slot, using whatever constructor arguments I pass, with no copy and no move
         template <typename... Args>
@@ -49,7 +101,7 @@ class static_vector {
         {
             if (size_ == N) return nullptr; // edge case: alrdy full
             // std::construct_at uses the address u give it (in contrast "new" finds fresh heap memory)
-            T* ptr = std::construct_at(slot(size_), std::forward<Args>(args)... );  // build a T at the first empty slot, passing the arguments through unchanged
+            T* ptr = std::construct_at(slot(size_), std::forward<Args>(args)... );  // build a T at the first empty slot, passing the arguments through unchanged        
             ++size_;   // Smart design: We increment size only after std::construct_at finish successfully so in case it throws, the size_ never overclaims an element that doesn't exist. The destructor later destroys size_ slots so this is important to avoid double-free
             return ptr;
         }

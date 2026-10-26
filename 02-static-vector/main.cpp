@@ -1,9 +1,16 @@
 #include "static_vector.h"
 #include "../common/tracer.h"
+#include "../common/thrower.h"
 
-#include <cstddef>
-#include <cassert>
+#include <cstdio>    // for std::printf()
+#include <cstddef>   
+#include <cassert>   // for assert()
 #include <utility>   // for std::move()
+
+
+// compile-time static asserts
+static_assert(std::is_nothrow_move_constructible_v<static_vector<Tracer, 4>>);
+static_assert(!std::is_nothrow_move_constructible_v<static_vector<Thrower, 4>>);
 
 
 int main() {
@@ -187,4 +194,121 @@ int main() {
     Tracer::expect(4,0,0,0,0,4,"fill to capacity");
 
 
+    // Test 11
+    Tracer::reset();
+    {
+        static_vector<Tracer, 4> a;
+        a.try_emplace_back(0, 0.0);
+        a.try_emplace_back(1, 0.0);
+        a.try_emplace_back(2, 0.0);
+        static_vector<Tracer, 4> b(a);
+        b[0].id = 99;
+        assert(a[0].id == 0); // check that a[0].id remains unchanged
+    }
+    Tracer::expect(3,3,0,0,0,6,"Test the Copy Constructor");
+
+
+    // Test 12
+    Tracer::reset();
+    {
+        static_vector<Tracer, 4> a;
+        a.try_emplace_back(0, 0.0);
+        a.try_emplace_back(1, 0.0);
+        a.try_emplace_back(2, 0.0);
+        static_vector<Tracer, 4> c(std::move(a));
+        c[0].id = 99;
+        assert(a.size() == 0); // check that move constructor worked
+    }
+    Tracer::expect(3,0,3,0,0,6,"Test the Move Constructor");
+
+
+    // Test 13
+    Tracer::reset();
+    {
+        static_vector<Tracer, 4> a;
+        a.try_emplace_back(0, 0.0);
+        a.try_emplace_back(1, 0.0);
+        a.try_emplace_back(2, 0.0);
+        static_vector<Tracer, 4> b;
+        b.try_emplace_back(99, 0.0);
+        b.try_emplace_back(100, 0.0);
+        b = a;
+        assert(b.size() == 3); // check that copy assignment worked
+        Tracer::expect(5,3,0,0,0,2,"Test the Copy Assignment");
+    }
+
+
+    // Test 14
+    Tracer::reset();
+    {
+        static_vector<Tracer, 4> a;
+        a.try_emplace_back(0, 0.0);
+        a.try_emplace_back(1, 0.0);
+        a.try_emplace_back(2, 0.0);
+        static_vector<Tracer, 4> c;
+        c.try_emplace_back(99, 0.0);
+        c = std::move(a);
+        assert(a.size() == 0); // check that move assignment worked
+        Tracer::expect(4,0,3,0,0,4,"Test the Move Assignment");
+    }
+
+
+    // Test 15
+    Tracer::reset();
+    {
+        static_vector<Tracer, 4> b;
+        b.try_emplace_back(0, 0.0);
+        b.try_emplace_back(1, 0.0);
+        b = b;
+        assert(b.size() == 2); // edge case: self-copy assignment
+        Tracer::expect(2,0,0,0,0,0,"Test the Self Copy Assignment");
+    }
+
+
+    // Test 16: a constructor throws inside try_emplace_back (experiment 1)
+    Thrower::countdown = -1;
+    {
+        static_vector<Thrower, 4> v;
+        v.try_emplace_back("payload number one, long");
+        v.try_emplace_back("payload number two, long");
+
+        bool caught = false;
+        Thrower::countdown = 0;                     // the very next Thrower constructor throws
+        try {
+            v.try_emplace_back("payload number three, long");
+        } catch (const std::runtime_error&) {
+            caught = true;
+        }
+        Thrower::countdown = -1;                    // back to "never"
+
+        std::printf("%s 16a throw in try_emplace_back: caught=%d size=%zu live=%d\n",
+                    (caught && v.size() == 2 && Thrower::live == 2) ? "[PASS]" : "[FAIL]",
+                    caught, v.size(), Thrower::live);
+    }
+    std::printf("%s 16b after the scope: live=%d\n",
+                Thrower::live == 0 ? "[PASS]" : "[FAIL]", Thrower::live);
+
+
+    // Test 17: the copy constructor throws on the third element (experiment 3, with the fix)
+    {
+        static_vector<Thrower, 4> a;
+        a.try_emplace_back("payload number one, long");
+        a.try_emplace_back("payload number two, long");
+        a.try_emplace_back("payload number three, long");
+
+        bool caught = false;
+        Thrower::countdown = 2;                     // copies 1 and 2 succeed, copy 3 throws
+        try {
+            static_vector<Thrower, 4> b(a);
+        } catch (const std::runtime_error&) {
+            caught = true;
+        }
+        Thrower::countdown = -1;
+
+        std::printf("%s 17a copy throws halfway: caught=%d a.size=%zu live=%d\n",
+                    (caught && a.size() == 3 && Thrower::live == 3) ? "[PASS]" : "[FAIL]",
+                    caught, a.size(), Thrower::live);
+    }
+    std::printf("%s 17b after the scope: live=%d\n",
+                Thrower::live == 0 ? "[PASS]" : "[FAIL]", Thrower::live);
 }
