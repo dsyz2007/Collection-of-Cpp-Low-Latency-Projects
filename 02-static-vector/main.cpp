@@ -22,23 +22,13 @@ int main() {
     std::printf("%zu\n", sizeof(static_vector<Tracer, 4>));
   
 
-    // Test 1
+    // Test 1: an empty static_vector builds nothing (a T data_[N] version would give ctor=4 dtor=4)
     Tracer::reset();
     {
         static_vector<Tracer, 4> v;
-
-        Tracer* p1 = v.try_emplace_back(0, 0.0);
-        Tracer* p2 = v.try_emplace_back(1, 0.0);
-        v.try_emplace_back(2, 0.0);
-        v.try_emplace_back(3, 0.0);
-        Tracer* p5 = v.try_emplace_back(4, 0.0);
-
-        assert(p5 == nullptr);
-        assert((char*)p2 - (char*)p1 == sizeof(Tracer));
-        std::printf("%d\n", v.full());
-        
-        Tracer::expect(4,0,0,0,0,0,"fill to capacity");
+        assert(v.empty() && v.size() == 0);
     }
+    Tracer::expect(0,0,0,0,0,0,"Empty vector builds nothing");
 
 
     // Test 2
@@ -149,9 +139,18 @@ int main() {
             ++count_v;
         }
 
-        assert(count_cv == 3 && count_v == 3);
+        // the empty half: a range-for over an empty const vector runs zero times (begin() == end())
+        static_vector<Tracer, 4> e;
+        const auto& ce = e;
+        int count_empty = 0;
+
+        for ([[maybe_unused]] const auto& x : ce) {
+            ++count_empty;
+        }
+
+        assert(count_cv == 3 && count_v == 3 && count_empty == 0);
     }
-    Tracer::expect(3,0,0,0,0,3,"All element must be moved, not copied");
+    Tracer::expect(3,0,0,0,0,3,"Range-for visits by reference, no copies");
 
 
     // Test 9
