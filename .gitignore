@@ -5,8 +5,11 @@
 *.o
 *.s
 test
+tests/tests
+tests/weak_tests
 **/bench/bench
 /02-static-vector/static_vector
+/03-shared-ptr/Shared
 main
 Unique
 a.out
